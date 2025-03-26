@@ -1,96 +1,130 @@
 /**
  * @file gpio_irq_driver.c
- * @brief GPIO IRQ Driver for handling interrupts on GPIO 23.
+ * @brief GPIO IRQ Counter Driver
  *
- * This driver initializes a GPIO pin (GPIO 23) and sets up an interrupt handler
- * for it. The interrupt handler logs a message when the interrupt is triggered.
+ * This driver handles GPIO interrupts and counts the number of times an interrupt occurs.
+ * It is designed to work with a device tree entry that specifies a GPIO line.
  *
- * The driver reads the GPIO and IRQ information from the Device Tree.
- *
- * @details
- * - The driver looks for a Device Tree node named "custom_btn" and its child node "button".
- * - It retrieves the IRQ number associated with the GPIO from the Device Tree.
- * - It requests the IRQ and sets up an interrupt handler for falling edge triggers.
- * - It also requests the GPIO descriptor for GPIO 23.
- *
- * @note
- * - The driver uses the `arch_initcall` macro to register the initialization function
- *   to be called during the boot process.
- * - The driver cleans up by freeing the IRQ and releasing the GPIO descriptor during exit.
- *
- * @author
- * - Original Author: Arkadiusz Kubiak
- *
- * @date
- * - Initial version: 2025-02-21
- *
- * @license
- * - This code is licensed under the GPL-2.0 license.
+ * @autor Arkadiusz Kubiak
+ * @license GPL
  */
-#include <linux/init.h>
-#include <linux/kernel.h>
-#include <linux/of.h>
-#include <linux/of_irq.h>
-#include <linux/interrupt.h>
-#include <linux/gpio/consumer.h> 
-#include <linux/irq.h>
 
-#define GPIO_NUM 23
-static unsigned int irq_number;
-static struct gpio_desc *gpio23;
+ #include <linux/module.h>
+ #include <linux/init.h>
+ #include <linux/gpio.h>
+ #include <linux/interrupt.h>
+ #include <linux/of.h>
+ #include <linux/of_gpio.h>
+ #include <linux/platform_device.h>
+ #include <linux/atomic.h> // Use atomic operations provided by the kernel
 
-// Interrupt handler for GPIO 23
-static irqreturn_t gpio_irq_handler(int irq, void *dev_id) {
-    pr_info("GPIO %d interrupt triggered!\n", GPIO_NUM);
-    return IRQ_HANDLED;
-}
-
-// Initialization function for the GPIO IRQ driver
-static int __init gpio_driver_init(void) {
-    struct device_node *np;
-    int ret;
-
-    // Find the Device Tree node named "custom_btn"
-    np = of_find_node_by_name(NULL, "button_interrupt");
-    if (!np) {
-        pr_err("GPIO IRQ driver: Failed to find Device Tree node 'custom_btn'\n");
-        return -ENODEV;
-    }
-    
-    // Get the IRQ number from the Device Tree
-    irq_number = of_irq_get(np, 0);
-    if (irq_number < 0) {
-        pr_err("GPIO IRQ driver: Failed to get IRQ from Device Tree, error %d\n", irq_number);
-        return irq_number;
-    }
-    pr_info("GPIO IRQ driver: Successfully mapped IRQ %d\n", irq_number);
-    
-    // Request the IRQ and set up the interrupt handler for falling edge triggers
-    ret = request_irq(irq_number, gpio_irq_handler, IRQF_TRIGGER_FALLING, "gpio23_irq", NULL);
-    if (ret) {
-        pr_err("GPIO IRQ driver: Failed to request IRQ %d, error %d\n", irq_number, ret);
-        return ret;
-    }
-    pr_info("GPIO IRQ driver: Successfully requested IRQ %d\n", irq_number);
-
-    // Request the GPIO descriptor for GPIO 23
-    gpio23 = gpiod_get_from_of_node(np, "gpios", 0, GPIOD_IN, "custom_btn");
-    if (IS_ERR(gpio23)) {
-        pr_err("GPIO IRQ driver: Failed to request GPIO\n");
-    }
-
-    pr_info("GPIO IRQ driver initialized\n");
-    return 0;
-}
-
-// Exit function for the GPIO IRQ driver
-static void __exit gpio_driver_exit(void) {
-    // Free the IRQ
-    free_irq(irq_number, NULL);
-    // Release the GPIO descriptor
-    gpiod_put(gpio23);
-    pr_info("GPIO IRQ driver removed\n");
-}
-
-// Register the initialization function to be called during the boot process
-device_initcall(gpio_driver_init);
+ 
+ #define DRIVER_NAME "gpio_irq_counter"
+ 
+ // Global variables to store the IRQ number and interrupt count
+ static int gpio_irq;
+ static atomic_t counter = ATOMIC_INIT(0);
+ static struct gpio_desc *gpio_desc;
+ 
+ /**
+  * @brief Interrupt handler function.
+  *
+  * This function is called whenever an interrupt occurs on the specified GPIO line.
+  * It increments the interrupt count and logs a message.
+  *
+  * @param irq The IRQ number.
+  * @param dev_id Pointer to device-specific data (unused).
+  * @return IRQ_HANDLED indicating the interrupt was handled successfully.
+  */
+ static irqreturn_t gpio_irq_handler(int irq, void *dev_id)
+ {
+     // Increment the interrupt count
+     atomic_inc(&counter);  // Atomically increments counter
+     // Log the interrupt occurrence and count
+     pr_info(DRIVER_NAME ": Interrupt occurred! Count: %u\n", atomic_read(&counter));
+     return IRQ_HANDLED;
+ }
+ 
+ /**
+  * @brief Probe function for the GPIO IRQ driver.
+  *
+  * This function is called when the driver is matched with a device.
+  * It retrieves the GPIO from the device tree, requests an IRQ, and sets up the interrupt handler.
+  *
+  * @param pdev Pointer to the platform device structure.
+  * @return 0 on success, or a negative error code on failure.
+  */
+ static int gpio_irq_probe(struct platform_device *pdev)
+ {
+     struct device *dev = &pdev->dev;
+     int ret;
+ 
+     // Get the GPIO descriptor from the device tree
+     gpio_desc = devm_gpiod_get(dev, NULL, GPIOD_IN);
+     if (IS_ERR(gpio_desc)) {
+         dev_err(dev, "Failed to get GPIO from device tree\n");
+         return PTR_ERR(gpio_desc);
+     }
+ 
+     // Convert the GPIO descriptor to an IRQ number
+     gpio_irq = gpiod_to_irq(gpio_desc);
+     if (gpio_irq < 0) {
+         dev_err(dev, "Failed to get IRQ number\n");
+         return gpio_irq;
+     }
+ 
+     // Request the IRQ and set up the interrupt handler
+     ret = devm_request_irq(dev, gpio_irq, gpio_irq_handler, IRQF_TRIGGER_FALLING, DRIVER_NAME, NULL);
+     if (ret) {
+         dev_err(dev, "Failed to request IRQ\n");
+         return ret;
+     }
+ 
+     // Set the GPIO direction to input
+     ret = gpiod_direction_input(gpio_desc);
+     if (ret) {
+         dev_err(dev, "Failed to set GPIO direction to input\n");
+         return ret;
+     }
+ 
+     // Log the successful driver loading and IRQ registration
+     pr_info(DRIVER_NAME ": Driver loaded, IRQ registered on GPIO\n");
+     return 0;
+ }
+ 
+ /**
+  * @brief Device tree match table.
+  *
+  * This table is used to match the driver with compatible devices specified in the device tree.
+  */
+ static const struct of_device_id gpio_irq_dt_ids[] = {
+     { .compatible = "custom,gpio-irq-counter" },
+     {}
+ };
+ 
+ /**
+  * @brief Platform driver structure.
+  *
+  * This structure contains the driver name, device tree match table, and probe function.
+  */
+ static struct platform_driver gpio_irq_driver = {
+     .driver = {
+         .name = DRIVER_NAME,
+         .of_match_table = gpio_irq_dt_ids,
+     },
+     .probe = gpio_irq_probe,
+ };
+ 
+ /**
+  * @brief Driver initialization function.
+  *
+  * This function is called when the driver is loaded. It registers the platform driver.
+  *
+  * @return 0 on success, or a negative error code on failure.
+  */
+ static int __init gpio_irq_driver_init(void)
+ {
+     return platform_driver_register(&gpio_irq_driver);
+ }
+ device_initcall(gpio_irq_driver_init);
+ 

@@ -3,22 +3,10 @@
 
 #include "../bcm2712-rpi-5-b.dts"
 
-
-&pinctrl {
-    button_pins: button_pins {
-		function = "input";
-		pins = "gpio23";
-		bias-pull-up;
-    };
-};
-
 / {
-    button_interrupt: button_interrupt {
-		pinctrl-names = "default";
-		pinctrl-0 = <&button_pins>;
-
-		interrupts = <21 IRQ_TYPE_EDGE_FALLING>;
-		interrupt-parent = <&rp1_gpio>;
-		gpios = <&rp1_gpio 23 GPIO_ACTIVE_LOW>;
-    };
+	gpio_irq_counter {
+		compatible = "custom,gpio-irq-counter";
+		gpios = <&gpio 23 GPIO_ACTIVE_LOW>;
+		gpio-pull-up;
+	};
 };
